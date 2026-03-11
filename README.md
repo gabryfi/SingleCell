@@ -3,6 +3,17 @@
 
 ####################################
 
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+sample_dirs <- list(
+  adeno = "/media/user/8Tb/scRNAseq/adeno_wf/adeno/adeno.gene_raw_feature_bc_matrix",
+  sham  = "/media/user/8Tb/scRNAseq/sham_wf/sham/sham.gene_raw_feature_bc_matrix"
+)
+
+out_dir <- "/media/user/8Tb/scRNAseq/seurat_analysis/doubletfinder_raw_output"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 min_cells <- 3
 min_features <- 200
 max_features <- 6000
@@ -10,6 +21,7 @@ max_mt <- 10
 pcs_use <- 1:15
 cluster_resolution <- 0.5
 doublet_rate <- 0.075
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 # in_cells <- 3
 Quando crei l’oggetto Seurat, un gene viene tenuto solo se è espresso in almeno 3 cellule.
