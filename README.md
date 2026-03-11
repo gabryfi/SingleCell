@@ -1,7 +1,7 @@
 # SingleCell
 # 10X 3' GEM - Nanopore
 
-####################################
+
 
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 sample_dirs <- list(
@@ -13,6 +13,8 @@ out_dir <- "/media/user/8Tb/scRNAseq/seurat_analysis/doubletfinder_raw_output"
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
+
+
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 min_cells <- 3
 min_features <- 200
@@ -22,6 +24,7 @@ pcs_use <- 1:15
 cluster_resolution <- 0.5
 doublet_rate <- 0.075
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
 
 # in_cells <- 3
 Quando crei l’oggetto Seurat, un gene viene tenuto solo se è espresso in almeno 3 cellule.
