@@ -1,0 +1,658 @@
+# =====================================================
+# PSEUDOBULK DESEQ2 + GSEA
+# DRG mouse single-cell RNA-seq
+# Confronto: cluster scelto, ADENO vs SHAM
+# =====================================================
+
+# =====================================================
+# PARAMETRI PRINCIPALI DA MODIFICARE
+# =====================================================
+
+cluster_to_test <- "2"
+# cluster_to_test <- "4"
+
+RUN_DESEQ2 <- TRUE
+RUN_GSEA   <- TRUE
+
+# Per rifare solo GSEA dopo aver già fatto DESeq2:
+# RUN_DESEQ2 <- FALSE
+# RUN_GSEA   <- TRUE
+
+# Se stai lavorando in una sessione R dove l'oggetto Seurat è già caricato,
+# lascia TRUE.
+USE_OBJECT_ALREADY_LOADED <- TRUE
+
+# Se invece vuoi lanciare da terminale con Rscript e caricare un file .rds,
+# metti USE_OBJECT_ALREADY_LOADED <- FALSE e indica il path qui.
+input_seurat_rds <- "/media/user/8Tb/blaze_analysis/data_analysis/merged_seurat.rds"
+
+# Colonne metadata
+cluster_col <- "seurat_clusters"
+sample_col  <- "condition"
+
+# Assay Seurat
+assay_use <- "RNA"
+
+# Contrasto
+group_test      <- "ADENO"
+group_reference <- "SHAM"
+
+# Filtro locale prima di DESeq2
+min_total_counts <- 10
+
+# Output principale
+base_output_dir <- "/media/user/8Tb/blaze_analysis/data_analysis/DESeq2_GSEA"
+
+# Etichetta opzionale.
+# Lasciala vuota normalmente.
+# Se vuoi distinguere prove diverse sullo stesso cluster, usa per esempio:
+# analysis_extra_label <- "prova2"
+analysis_extra_label <- ""
+
+# =====================================================
+# PARAMETRI GSEA
+# =====================================================
+
+# Prima scelta consigliata: Hallmark mouse
+gsea_species <- "mouse"
+gsea_collection <- "H"
+gsea_subcollection <- NULL
+
+# Alternative possibili:
+# Reactome:
+# gsea_collection <- "C2"
+# gsea_subcollection <- "CP:REACTOME"
+
+# GO Biological Process:
+# gsea_collection <- "C5"
+# gsea_subcollection <- "GO:BP"
+
+gsea_minGSSize <- 10
+gsea_maxGSSize <- 500
+gsea_pvalueCutoff <- 1
+
+top_n_deseq <- 50
+top_n_gsea  <- 30
+
+# =====================================================
+# PACCHETTI
+# =====================================================
+
+suppressPackageStartupMessages({
+  if (RUN_DESEQ2 || USE_OBJECT_ALREADY_LOADED) {
+    library(Seurat)
+    library(Matrix)
+    library(DESeq2)
+  }
+
+  if (RUN_GSEA) {
+    library(dplyr)
+    library(clusterProfiler)
+    library(msigdbr)
+  }
+})
+
+# =====================================================
+# NOMI AUTOMATICI CHIARI
+# =====================================================
+
+contrast_name <- paste0(
+  "cluster_", cluster_to_test,
+  "_", group_test,
+  "_vs_", group_reference
+)
+
+if (!is.null(analysis_extra_label) && analysis_extra_label != "") {
+  contrast_name <- paste0(contrast_name, "_", analysis_extra_label)
+}
+
+gsea_label <- paste0("MSigDB_", gsea_collection)
+
+if (!is.null(gsea_subcollection)) {
+  gsea_label <- paste0(
+    gsea_label,
+    "_",
+    gsub(":", "_", gsea_subcollection)
+  )
+}
+
+gsea_label <- paste0(gsea_label, "_", gsea_species)
+
+output_dir <- file.path(base_output_dir, contrast_name)
+deseq_dir  <- file.path(output_dir, "DESeq2")
+gsea_dir   <- file.path(output_dir, "GSEA")
+
+dir.create(deseq_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(gsea_dir, recursive = TRUE, showWarnings = FALSE)
+
+deseq_full_file <- file.path(
+  deseq_dir,
+  paste0("DESeq2_", contrast_name, "_FULL.csv")
+)
+
+deseq_top_file <- file.path(
+  deseq_dir,
+  paste0("DESeq2_", contrast_name, "_TOP", top_n_deseq, "_padj005.csv")
+)
+
+rank_rds_file <- file.path(
+  gsea_dir,
+  paste0("GSEA_ranked_gene_list_", contrast_name, ".rds")
+)
+
+rank_csv_file <- file.path(
+  gsea_dir,
+  paste0("GSEA_ranked_gene_list_", contrast_name, ".csv")
+)
+
+gsea_result_file <- file.path(
+  gsea_dir,
+  paste0("GSEA_", contrast_name, "_", gsea_label, "_FULL.csv")
+)
+
+gsea_top_file <- file.path(
+  gsea_dir,
+  paste0("GSEA_", contrast_name, "_", gsea_label, "_TOP", top_n_gsea, ".csv")
+)
+
+gsea_dotplot_file <- file.path(
+  gsea_dir,
+  paste0("GSEA_dotplot_", contrast_name, "_", gsea_label, ".pdf")
+)
+
+# =====================================================
+# FUNZIONE: RECUPERA OGGETTO SEURAT
+# =====================================================
+
+get_seurat_object <- function() {
+
+  if (USE_OBJECT_ALREADY_LOADED) {
+
+    if (exists("annotated", envir = .GlobalEnv)) {
+      obj <- get("annotated", envir = .GlobalEnv)
+      obj_name <- "annotated"
+    } else if (exists("merged_seurat", envir = .GlobalEnv)) {
+      obj <- get("merged_seurat", envir = .GlobalEnv)
+      obj_name <- "merged_seurat"
+    } else if (exists("combined", envir = .GlobalEnv)) {
+      obj <- get("combined", envir = .GlobalEnv)
+      obj_name <- "combined"
+    } else {
+      stop("Non trovo un oggetto Seurat già aperto chiamato annotated, merged_seurat o combined.")
+    }
+
+  } else {
+
+    if (!file.exists(input_seurat_rds)) {
+      stop(paste0("Non trovo il file Seurat .rds:\n", input_seurat_rds))
+    }
+
+    obj <- readRDS(input_seurat_rds)
+    obj_name <- input_seurat_rds
+  }
+
+  if (!inherits(obj, "Seurat")) {
+    stop("L'oggetto trovato/caricato non sembra un oggetto Seurat.")
+  }
+
+  cat("\nOggetto Seurat usato:\n")
+  cat(obj_name, "\n")
+
+  return(obj)
+}
+
+# =====================================================
+# FUNZIONE: DESEQ2 PSEUDOBULK
+# =====================================================
+
+run_deseq2_pseudobulk <- function(seurat_obj, cluster_id) {
+
+  cat("\n=====================================================\n")
+  cat("DESeq2 pseudobulk\n")
+  cat("Confronto:", contrast_name, "\n")
+  cat("=====================================================\n\n")
+
+  if (!cluster_col %in% colnames(seurat_obj@meta.data)) {
+    stop(paste0("Non trovo la colonna cluster: ", cluster_col))
+  }
+
+  if (!sample_col %in% colnames(seurat_obj@meta.data)) {
+    stop(paste0("Non trovo la colonna campione: ", sample_col))
+  }
+
+  cat("Tabella cellule per campione e cluster:\n")
+  print(table(seurat_obj@meta.data[[sample_col]], seurat_obj@meta.data[[cluster_col]]))
+
+  meta_all <- seurat_obj@meta.data
+
+  cells_use <- rownames(meta_all)[
+    as.character(meta_all[[cluster_col]]) == as.character(cluster_id)
+  ]
+
+  if (length(cells_use) == 0) {
+    stop(paste0("Nessuna cellula trovata per il cluster ", cluster_id))
+  }
+
+  meta_cluster <- meta_all[cells_use, , drop = FALSE]
+  meta_cluster$sample_id <- as.character(meta_cluster[[sample_col]])
+
+  meta_cluster$group <- ifelse(
+    grepl("adeno", meta_cluster$sample_id, ignore.case = TRUE),
+    "ADENO",
+    ifelse(
+      grepl("sham", meta_cluster$sample_id, ignore.case = TRUE),
+      "SHAM",
+      NA
+    )
+  )
+
+  if (any(is.na(meta_cluster$group))) {
+    cat("\nCampioni non riconosciuti come ADENO o SHAM:\n")
+    print(unique(meta_cluster$sample_id[is.na(meta_cluster$group)]))
+    stop("Correggi i nomi campione o la regola grepl adeno/sham.")
+  }
+
+  cat("\nCellule usate nel cluster", cluster_id, ":\n")
+  print(table(meta_cluster$sample_id, meta_cluster$group))
+
+  samples_adeno <- unique(meta_cluster$sample_id[meta_cluster$group == "ADENO"])
+  samples_sham  <- unique(meta_cluster$sample_id[meta_cluster$group == "SHAM"])
+
+  if (length(samples_adeno) < 2 || length(samples_sham) < 2) {
+    stop("Servono almeno 2 campioni biologici per gruppo nel cluster selezionato.")
+  }
+
+  # -----------------------------------------------------
+  # Estrazione raw counts
+  # -----------------------------------------------------
+
+  counts <- tryCatch(
+    {
+      GetAssayData(
+        seurat_obj,
+        assay = assay_use,
+        layer = "counts"
+      )
+    },
+    error = function(e) {
+      cat("\nGetAssayData(layer = 'counts') non è riuscito.\n")
+      cat("Provo JoinLayers su una copia locale dell'oggetto.\n")
+
+      seurat_obj_local <- JoinLayers(seurat_obj)
+
+      GetAssayData(
+        seurat_obj_local,
+        assay = assay_use,
+        layer = "counts"
+      )
+    }
+  )
+
+  counts_cluster <- counts[, cells_use, drop = FALSE]
+
+  # -----------------------------------------------------
+  # Pseudobulk: somma raw counts per campione biologico
+  # -----------------------------------------------------
+
+  sample_levels <- unique(meta_cluster$sample_id)
+
+  pb_counts <- sapply(sample_levels, function(sid) {
+    Matrix::rowSums(
+      counts_cluster[, meta_cluster$sample_id == sid, drop = FALSE]
+    )
+  })
+
+  pb_counts <- as.matrix(pb_counts)
+  storage.mode(pb_counts) <- "integer"
+
+  keep <- rowSums(pb_counts) >= min_total_counts
+  pb_counts <- pb_counts[keep, , drop = FALSE]
+
+  cat("\nDimensione matrice pseudobulk dopo filtro locale:\n")
+  print(dim(pb_counts))
+
+  meta_pb <- data.frame(
+    sample_id = colnames(pb_counts),
+    group = ifelse(
+      grepl("adeno", colnames(pb_counts), ignore.case = TRUE),
+      "ADENO",
+      "SHAM"
+    ),
+    row.names = colnames(pb_counts)
+  )
+
+  meta_pb$group <- factor(
+    meta_pb$group,
+    levels = c(group_reference, group_test)
+  )
+
+  cat("\nMetadata pseudobulk:\n")
+  print(meta_pb)
+
+  # -----------------------------------------------------
+  # DESeq2
+  # -----------------------------------------------------
+
+  dds <- DESeqDataSetFromMatrix(
+    countData = pb_counts,
+    colData = meta_pb,
+    design = ~ group
+  )
+
+  dds <- DESeq(dds, quiet = TRUE)
+
+  res <- results(
+    dds,
+    contrast = c("group", group_test, group_reference)
+  )
+
+  res_df <- as.data.frame(res)
+  res_df$gene <- rownames(res_df)
+
+  res_df$fold_change_ADENO_vs_SHAM <- 2 ^ res_df$log2FoldChange
+
+  res_df$direction <- ifelse(
+    res_df$log2FoldChange > 0,
+    "UP_in_ADENO",
+    ifelse(
+      res_df$log2FoldChange < 0,
+      "UP_in_SHAM",
+      "NO_CHANGE"
+    )
+  )
+
+  res_df <- res_df[
+    ,
+    c(
+      "gene",
+      "baseMean",
+      "log2FoldChange",
+      "fold_change_ADENO_vs_SHAM",
+      "lfcSE",
+      "stat",
+      "pvalue",
+      "padj",
+      "direction"
+    )
+  ]
+
+  res_df_ordered <- res_df[
+    order(res_df$padj, -abs(res_df$log2FoldChange), na.last = TRUE),
+  ]
+
+  res_sig <- res_df_ordered[
+    !is.na(res_df_ordered$padj) &
+      res_df_ordered$padj < 0.05,
+    ,
+    drop = FALSE
+  ]
+
+  cat("\nNumero geni con padj < 0.05:\n")
+  print(nrow(res_sig))
+
+  cat("\nTOP", top_n_deseq, "geni DESeq2 -", contrast_name, "\n\n")
+  print(head(res_sig, top_n_deseq), row.names = FALSE)
+
+  write.csv(
+    res_df_ordered,
+    deseq_full_file,
+    row.names = FALSE,
+    quote = FALSE
+  )
+
+  write.csv(
+    head(res_sig, top_n_deseq),
+    deseq_top_file,
+    row.names = FALSE,
+    quote = FALSE
+  )
+
+  cat("\nFile DESeq2 salvati:\n")
+  cat(deseq_full_file, "\n")
+  cat(deseq_top_file, "\n")
+
+  invisible(res_df_ordered)
+}
+
+# =====================================================
+# FUNZIONE: COSTRUISCE RANKED LIST DA DESEQ2
+# =====================================================
+
+make_rank_from_deseq2 <- function(deseq_file) {
+
+  if (!file.exists(deseq_file)) {
+    stop(paste0(
+      "Non trovo il file DESeq2:\n",
+      deseq_file,
+      "\nDevi prima eseguire RUN_DESEQ2 <- TRUE almeno una volta."
+    ))
+  }
+
+  res_df <- read.csv(deseq_file, stringsAsFactors = FALSE)
+
+  required_cols <- c("gene", "stat")
+
+  missing_cols <- setdiff(required_cols, colnames(res_df))
+
+  if (length(missing_cols) > 0) {
+    stop(paste0(
+      "Nel file DESeq2 mancano queste colonne: ",
+      paste(missing_cols, collapse = ", ")
+    ))
+  }
+
+  res_rank <- res_df[
+    !is.na(res_df$gene) &
+      res_df$gene != "" &
+      !is.na(res_df$stat) &
+      is.finite(res_df$stat),
+    ,
+    drop = FALSE
+  ]
+
+  res_rank <- res_rank %>%
+    arrange(desc(abs(stat))) %>%
+    distinct(gene, .keep_all = TRUE)
+
+  gene_rank <- res_rank$stat
+  names(gene_rank) <- res_rank$gene
+
+  gene_rank <- sort(gene_rank, decreasing = TRUE)
+
+  rank_df <- data.frame(
+    gene = names(gene_rank),
+    deseq2_stat_for_GSEA = as.numeric(gene_rank),
+    row.names = NULL
+  )
+
+  saveRDS(gene_rank, rank_rds_file)
+
+  write.csv(
+    rank_df,
+    rank_csv_file,
+    row.names = FALSE,
+    quote = FALSE
+  )
+
+  cat("\nRanked list GSEA salvata:\n")
+  cat(rank_rds_file, "\n")
+  cat(rank_csv_file, "\n")
+
+  return(gene_rank)
+}
+
+# =====================================================
+# FUNZIONE: CARICA MSIGDB COMPATIBILE CON VERSIONI DIVERSE DI msigdbr
+# =====================================================
+
+load_msigdb_sets <- function() {
+
+  msigdbr_args <- names(formals(msigdbr::msigdbr))
+
+  if ("collection" %in% msigdbr_args) {
+
+    if (is.null(gsea_subcollection)) {
+      msig <- msigdbr::msigdbr(
+        species = gsea_species,
+        collection = gsea_collection
+      )
+    } else {
+      msig <- msigdbr::msigdbr(
+        species = gsea_species,
+        collection = gsea_collection,
+        subcollection = gsea_subcollection
+      )
+    }
+
+  } else {
+
+    if (is.null(gsea_subcollection)) {
+      msig <- msigdbr::msigdbr(
+        species = gsea_species,
+        category = gsea_collection
+      )
+    } else {
+      msig <- msigdbr::msigdbr(
+        species = gsea_species,
+        category = gsea_collection,
+        subcategory = gsea_subcollection
+      )
+    }
+  }
+
+  if (!all(c("gs_name", "gene_symbol") %in% colnames(msig))) {
+    stop("msigdbr non ha restituito colonne gs_name e gene_symbol.")
+  }
+
+  cat("\nMSigDB caricata:\n")
+  cat("Species:", gsea_species, "\n")
+  cat("Collection:", gsea_collection, "\n")
+  cat("Subcollection:", ifelse(is.null(gsea_subcollection), "NULL", gsea_subcollection), "\n")
+
+  if ("db_version" %in% colnames(msig)) {
+    cat("MSigDB version:", paste(unique(msig$db_version), collapse = ", "), "\n")
+  }
+
+  term2gene <- msig %>%
+    dplyr::select(gs_name, gene_symbol) %>%
+    dplyr::distinct()
+
+  cat("Numero gene set:", length(unique(term2gene$gs_name)), "\n")
+
+  return(term2gene)
+}
+
+# =====================================================
+# FUNZIONE: GSEA INDIPENDENTE
+# =====================================================
+
+run_gsea_from_deseq2_file <- function() {
+
+  cat("\n=====================================================\n")
+  cat("GSEA\n")
+  cat("Confronto:", contrast_name, "\n")
+  cat("Collezione:", gsea_label, "\n")
+  cat("=====================================================\n\n")
+
+  gene_rank <- make_rank_from_deseq2(deseq_full_file)
+
+  cat("\nNumero geni nella ranked list:\n")
+  print(length(gene_rank))
+
+  term2gene <- load_msigdb_sets()
+
+  gsea_res <- clusterProfiler::GSEA(
+    geneList = gene_rank,
+    TERM2GENE = term2gene,
+    minGSSize = gsea_minGSSize,
+    maxGSSize = gsea_maxGSSize,
+    pvalueCutoff = gsea_pvalueCutoff,
+    verbose = FALSE,
+    seed = TRUE
+  )
+
+  gsea_df <- as.data.frame(gsea_res)
+
+  if (nrow(gsea_df) == 0) {
+    cat("\nGSEA non ha restituito pathway.\n")
+    return(invisible(gsea_df))
+  }
+
+  gsea_df <- gsea_df[
+    order(gsea_df$p.adjust, -abs(gsea_df$NES), na.last = TRUE),
+  ]
+
+  write.csv(
+    gsea_df,
+    gsea_result_file,
+    row.names = FALSE,
+    quote = FALSE
+  )
+
+  write.csv(
+    head(gsea_df, top_n_gsea),
+    gsea_top_file,
+    row.names = FALSE,
+    quote = FALSE
+  )
+
+  cat("\nTOP", top_n_gsea, "risultati GSEA:\n\n")
+  print(head(gsea_df, top_n_gsea), row.names = FALSE)
+
+  cat("\nFile GSEA salvati:\n")
+  cat(gsea_result_file, "\n")
+  cat(gsea_top_file, "\n")
+
+  if (
+    requireNamespace("enrichplot", quietly = TRUE) &&
+      requireNamespace("ggplot2", quietly = TRUE)
+  ) {
+
+    pdf(gsea_dotplot_file, width = 10, height = 7)
+
+    print(
+      enrichplot::dotplot(gsea_res, showCategory = 20) +
+        ggplot2::ggtitle(
+          paste0("GSEA ", contrast_name, " - ", gsea_label)
+        )
+    )
+
+    dev.off()
+
+    cat(gsea_dotplot_file, "\n")
+
+  } else {
+    cat("\nPacchetto enrichplot non disponibile: salto il dotplot PDF.\n")
+  }
+
+  invisible(gsea_df)
+}
+
+# =====================================================
+# ESECUZIONE
+# =====================================================
+
+cat("\n======================================\n")
+cat("PARAMETRI ANALISI\n")
+cat("======================================\n")
+cat("Cluster:", cluster_to_test, "\n")
+cat("Contrasto:", group_test, "vs", group_reference, "\n")
+cat("RUN_DESEQ2:", RUN_DESEQ2, "\n")
+cat("RUN_GSEA:", RUN_GSEA, "\n")
+cat("Output dir:", output_dir, "\n")
+cat("GSEA label:", gsea_label, "\n")
+
+if (RUN_DESEQ2) {
+  obj <- get_seurat_object()
+  deseq_out <- run_deseq2_pseudobulk(obj, cluster_to_test)
+}
+
+if (RUN_GSEA) {
+  gsea_out <- run_gsea_from_deseq2_file()
+}
+
+cat("\n======================================\n")
+cat("FINITO\n")
+cat("Output salvati in:\n")
+cat(output_dir, "\n")
+cat("======================================\n")
