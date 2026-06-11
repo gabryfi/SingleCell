@@ -8,10 +8,12 @@ RAW_DIR <- "adeno1_sup.gene_raw_feature_bc_matrix"
 PROCESSED_DIR <- "adeno1_sup.gene_processed_feature_bc_matrix"
 
 # Metti un numero per forzare rho manuale, es:
+
 # 0.011 = come stima automatica precedente
 # 0.02  = più pesante
 # 0.03  = ancora più pesante
-# NA    = usa autoEstCont() senza forzare rho
+
+# MANUAL_RHO <- NA    = usa autoEstCont() senza forzare rho
 MANUAL_RHO <- 0.02
 
 ############################################################
